@@ -1,0 +1,14 @@
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+/data/*
+/.venv/*
+/.idea/*
+/cmake-build-debug/*
+/cmake-build-release/*
+/results/*
+/__pycache__
+.DS_Store
