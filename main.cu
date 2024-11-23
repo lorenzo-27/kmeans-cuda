@@ -184,21 +184,37 @@ __global__ void assignClusters(const float* data, size_t n_points, size_t n_dims
 
 // CUDA kernel for update step
 __global__ void updateCentroids(const float* data, size_t n_points, size_t n_dims,
-                               float* centroids, size_t k,
-                               const int* assignments, const int* counts) {
-    int c = blockIdx.x;
-    int d = threadIdx.x;
-    if (c >= k || d >= n_dims) return;
+                                        float* centroids, size_t k,
+                                        const int* assignments, const int* counts) {
+    extern __shared__ float shared_sums[];
+
+    int cluster = blockIdx.x;
+    int dim = blockIdx.y;
+    if (cluster >= k || dim >= n_dims) return;
 
     float sum = 0.0f;
-    for (int i = 0; i < n_points; i++) {
-        if (assignments[i] == c) {
-            sum += data[d * n_points + i];
+    // Parallelize over points
+    for (int i = threadIdx.x; i < n_points; i += blockDim.x) {
+        if (assignments[i] == cluster) {
+            sum += data[dim * n_points + i];
         }
     }
-    
-    if (counts[c] > 0) {
-        centroids[d * k + c] = sum / counts[c];
+
+    // Parallel reduction in shared memory
+    shared_sums[threadIdx.x] = sum;
+    __syncthreads();
+
+    // Reduce within block
+    for (int stride = blockDim.x/2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            shared_sums[threadIdx.x] += shared_sums[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+
+    // Write result
+    if (threadIdx.x == 0 && counts[cluster] > 0) {
+        centroids[dim * k + cluster] = shared_sums[0] / counts[cluster];
     }
 }
 
@@ -261,19 +277,19 @@ CentroidsSoA initialize_centroids(const DatasetSoA& data, size_t k) {
     return centroids;
 }
 
-void kmeans_cuda(const DatasetSoA& data, const CentroidsSoA& centroids,
-                 int* assignments, int max_iter) {
+void kmeans_cuda(const DatasetSoA& data, const CentroidsSoA& centroids, int* assignments, int max_iter) {
     // Allocate device memory for assignments
     int* d_assignments;
     CHECK_CUDA(cudaMalloc(&d_assignments, data.n_points * sizeof(int)));
 
     // Calculate grid and block dimensions
-    constexpr int BLOCK_SIZE = 512; // Threads per block
+    constexpr int BLOCK_SIZE = 256; // Threads per block
     dim3 assignGrid((data.n_points + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 assignBlock(BLOCK_SIZE);
 
-    dim3 updateGrid(centroids.k);
-    dim3 updateBlock(data.n_dims);
+    dim3 updateGrid(centroids.k, data.n_dims);
+    dim3 updateBlock(256);
+    size_t sharedMemSize = 256 * sizeof(float);
 
     for (int iter = 0; iter < max_iter; ++iter) {
         // Reset counts
@@ -289,7 +305,7 @@ void kmeans_cuda(const DatasetSoA& data, const CentroidsSoA& centroids,
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // Update step
-        updateCentroids<<<updateGrid, updateBlock>>>(
+        updateCentroids <<<updateGrid, updateBlock, sharedMemSize>>>(
             data.data, data.n_points, data.n_dims,
             centroids.data, centroids.k,
             d_assignments, centroids.d_counts
