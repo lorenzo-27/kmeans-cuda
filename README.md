@@ -34,4 +34,4 @@ For a comprehensive understanding of the implementation and performance analysis
 - Experimental results and analysis
 
 ## License
-This project is licensed under the <a href="https://github.com/DavideDelBimbo/K-Means-OpenMP/blob/main/LICENSE" target="_blank">MIT</a> License.
+This project is licensed under the <a href="https://github.com/lorenzo-27/kmeans-cuda/blob/master/LICENSE" target="_blank">MIT</a> License.
